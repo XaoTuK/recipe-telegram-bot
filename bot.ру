@@ -1,81 +1,121 @@
+import os
+import logging
 import requests
-import json
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-TELEGRAM_TOKEN = "8462003240:AAEzP4drh3jb6FErp26qr_HaRMjQF9i1OII"
-YANDEX_API_KEY = "AQVN21SkiHPTzTQ7PRtnMipVWr17W-hEv0WNqn8c"
-FOLDER_ID = "b1gne1sf06u2lnsieuk9"
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        products = update.message.text
-        await update.message.reply_text(f"🔍 Ищу рецепт для: {products}...")
+class YandexGPTProxy:
+    def __init__(self):
+        self.api_key = os.getenv('YANDEX_API_KEY')
+        self.folder_id = os.getenv('YANDEX_FOLDER_ID')
+        self.proxy_url = os.getenv('PROXY_URL')
+        
+    def get_proxies(self):
+        if self.proxy_url:
+            return {
+                'http': self.proxy_url,
+                'https': self.proxy_url
+            }
+        return None
+    
+    def make_request(self, messages):
+        url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         
         headers = {
-            "Authorization": f"Api-Key {YANDEX_API_KEY}",
-            "Content-Type": "application/json",
-            "User-Agent": "TelegramBot/1.0"
+            "Authorization": f"Api-Key {self.api_key}",
+            "Content-Type": "application/json"
         }
         
         data = {
-            "modelUri": f"gpt://{FOLDER_ID}/yandexgpt",
+            "modelUri": f"gpt://{self.folder_id}/yandexgpt-lite",
             "completionOptions": {
                 "stream": False,
                 "temperature": 0.7,
-                "maxTokens": 1500
+                "maxTokens": 2000
             },
-            "messages": [
-                {
-                    "role": "system",
-                    "text": "Ты профессиональный шеф-повар. Создавай подробные рецепты с четкой структурой."
-                },
-                {
-                    "role": "user", 
-                    "text": f"Создай кулинарный рецепт используя эти продукты: {products}. Обязательный формат:\n1. НАЗВАНИЕ БЛЮДА\n2. ИНГРЕДИЕНТЫ (с количествами)\n3. ПРИГОТОВЛЕНИЕ (пошагово)\n4. ВРЕМЯ ГОТОВКИ\n5. СОВЕТЫ"
-                }
-            ]
+            "messages": messages
         }
         
-        print(f"📤 Отправляем запрос к Яндекс API...")
-        
-        response = requests.post(
-            "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
-            json=data,
-            headers=headers,
-            timeout=20
+        try:
+            response = requests.post(
+                url,
+                json=data,
+                headers=headers,
+                proxies=self.get_proxies(),
+                timeout=(10, 30)  # 10 сек на подключение, 30 сек на чтение
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result['result']['alternatives'][0]['message']['text']
+            else:
+                logger.error(f"Yandex API error: {response.status_code} - {response.text}")
+                return None
+                
+        except requests.exceptions.Timeout:
+            logger.error("Request timeout")
+            return None
+        except requests.exceptions.ConnectionError:
+            logger.error("Connection error")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            return None
+
+# Инициализация Яндекс GPT
+yandex_gpt = YandexGPTProxy()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Привет! Я бот-шеф. Напиши мне, что хочешь приготовить, и я помогу с рецептом!"
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    
+    # Показываем индикатор набора
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
+    messages = [
+        {
+            "role": "system",
+            "text": "Ты профессиональный шеф-повар. Давай подробные рецепты с ингредиентами и пошаговыми инструкциями. Будь креативным и полезным."
+        },
+        {
+            "role": "user",
+            "text": user_message
+        }
+    ]
+    
+    response_text = yandex_gpt.make_request(messages)
+    
+    if response_text:
+        await update.message.reply_text(response_text)
+    else:
+        await update.message.reply_text(
+            "Извините, возникла проблема с подключением к сервису. Попробуйте позже."
         )
-        
-        print(f"📥 Ответ: {response.status_code}")
-        
-        if response.status_code == 200:
-            result = response.json()
-            recipe = result['result']['alternatives'][0]['message']['text']
-            print("✅ Успешный ответ от Яндекс GPT")
-            await update.message.reply_text(f"🍳 {recipe}")
-        else:
-            error_msg = f"❌ Ошибка API: {response.status_code}\n"
-            try:
-                error_detail = response.json()
-                error_msg += f"Детали: {error_detail}"
-            except:
-                error_msg += f"Текст: {response.text}"
-            
-            print(error_msg)
-            await update.message.reply_text("⚠️ Яндекс GPT временно недоступен. Попробуйте позже.")
-            
-    except requests.exceptions.Timeout:
-        await update.message.reply_text("⏰ Таймаут запроса к Яндекс GPT")
-    except requests.exceptions.ConnectionError:
-        await update.message.reply_text("🔌 Ошибка подключения к Яндекс GPT")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Неожиданная ошибка: {str(e)}")
 
-app = Application.builder().token(TELEGRAM_TOKEN).build()
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Exception while handling an update: {context.error}")
 
-if __name__ == "__main__":
-    print("🚀 Запускаем бота с Яндекс GPT...")
-    print(f"🔑 API Key: {YANDEX_API_KEY[:10]}...")
-    print(f"📁 Folder ID: {FOLDER_ID}")
-    app.run_polling()
+def main():
+    # Создаем приложение
+    application = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
+    
+    # Добавляем обработчики
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Обработчик ошибок
+    application.add_error_handler(error_handler)
+    
+    # Запускаем бота
+    application.run_polling()
+
+if __name__ == '__main__':
+    main()
