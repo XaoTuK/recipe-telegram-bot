@@ -5,25 +5,21 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
-class YandexGPTProxy:
+class YandexGPT:
     def __init__(self):
-        self.api_key = os.getenv('YANDEX_API_KEY')
-        self.folder_id = os.getenv('YANDEX_FOLDER_ID')
-        self.proxy_url = os.getenv('PROXY_URL')
+        # ВАЖНО: В продакшене используйте переменные окружения!
+        self.api_key = "AQVN2ISkHPTzTQ7PRtnMP5pVWr17W-hEv0WNqn8c"  # Замените на env variable!
+        self.folder_id = "b1g8k14p2bqfrf2djq0c"  # Замените на env variable!
+        self.base_url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
         
-    def get_proxies(self):
-        if self.proxy_url:
-            return {
-                'http': self.proxy_url,
-                'https': self.proxy_url
-            }
-        return None
-    
     def make_request(self, messages):
-        url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+        """Отправляет запрос к Yandex GPT API"""
         
         headers = {
             "Authorization": f"Api-Key {self.api_key}",
@@ -41,71 +37,103 @@ class YandexGPTProxy:
         }
         
         try:
+            logger.info("Sending request to Yandex GPT API...")
             response = requests.post(
-                url,
+                self.base_url,
                 json=data,
                 headers=headers,
-                proxies=self.get_proxies(),
-                timeout=(10, 30)  # 10 сек на подключение, 30 сек на чтение
+                timeout=30
             )
+            
+            logger.info(f"Response status: {response.status_code}")
             
             if response.status_code == 200:
                 result = response.json()
                 return result['result']['alternatives'][0]['message']['text']
             else:
-                logger.error(f"Yandex API error: {response.status_code} - {response.text}")
-                return None
+                logger.error(f"Yandex API error {response.status_code}: {response.text}")
+                return f"Ошибка API: {response.status_code}"
                 
         except requests.exceptions.Timeout:
             logger.error("Request timeout")
-            return None
+            return "Таймаут запроса к API"
         except requests.exceptions.ConnectionError:
             logger.error("Connection error")
-            return None
+            return "Ошибка подключения к API"
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
-            return None
+            return f"Неожиданная ошибка: {str(e)}"
 
 # Инициализация Яндекс GPT
-yandex_gpt = YandexGPTProxy()
+yandex_gpt = YandexGPT()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! Я бот-шеф. Напиши мне, что хочешь приготовить, и я помогу с рецептом!"
-    )
+    """Обработчик команды /start"""
+    welcome_text = """
+👨‍🍳 Привет! Я бот-шеф!
+
+Я могу:
+• Подобрать рецепт по ингредиентам
+• Рассказать о технике приготовления  
+• Помочь с меню на день
+• Дать советы по кулинарии
+
+Просто напиши, что хочешь приготовить!
+"""
+    await update.message.reply_text(welcome_text)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик текстовых сообщений"""
     user_message = update.message.text
     
     # Показываем индикатор набора
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id, 
+        action="typing"
+    )
     
+    # Формируем сообщения для GPT
     messages = [
         {
             "role": "system",
-            "text": "Ты профессиональный шеф-повар. Давай подробные рецепты с ингредиентами и пошаговыми инструкциями. Будь креативным и полезным."
+            "text": """Ты профессиональный шеф-повар с многолетним опытом. 
+Давай подробные, понятные рецепты с точными количествами ингредиентов. 
+Будь креативным, дружелюбным и полезным. 
+Форматируй ответы с эмодзи и четкой структурой."""
         },
         {
-            "role": "user",
+            "role": "user", 
             "text": user_message
         }
     ]
     
+    # Получаем ответ от Яндекс GPT
     response_text = yandex_gpt.make_request(messages)
     
+    # Отправляем ответ пользователю
     if response_text:
-        await update.message.reply_text(response_text)
+        # Разбиваем длинные сообщения если нужно
+        if len(response_text) > 4096:
+            for i in range(0, len(response_text), 4096):
+                await update.message.reply_text(response_text[i:i+4096])
+        else:
+            await update.message.reply_text(response_text)
     else:
         await update.message.reply_text(
-            "Извините, возникла проблема с подключением к сервису. Попробуйте позже."
+            "❌ Извините, возникла проблема с подключением к сервису. Попробуйте позже."
         )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик ошибок"""
     logger.error(f"Exception while handling an update: {context.error}")
 
 def main():
+    """Основная функция запуска бота"""
+    # ВАЖНО: В продакшене используйте переменные окружения!
+    telegram_token = "8462003240:AAEzP4drh3jb6FErp26qr_HaRMjQF9i1OII"  # Замените на env variable!
+    
     # Создаем приложение
-    application = Application.builder().token(os.getenv('TELEGRAM_TOKEN')).build()
+    application = Application.builder().token(telegram_token).build()
     
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
@@ -115,7 +143,9 @@ def main():
     application.add_error_handler(error_handler)
     
     # Запускаем бота
+    logger.info("Bot is starting...")
     application.run_polling()
+    logger.info("Bot has stopped")
 
 if __name__ == '__main__':
     main()
