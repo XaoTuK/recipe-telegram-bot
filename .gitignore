@@ -3,3 +3,4 @@ config.py
 *.log
 __pycache__/
 *.pyc
+.env.example
