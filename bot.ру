@@ -1,120 +1,21 @@
 #!/usr/bin/env python3
 import os
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import requests
-import json
+from telegram.ext import Application, CommandHandler
 
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получаем конфигурационные переменные из Railway
-try:
-    BOT_TOKEN = os.environ['BOT_TOKEN']
-    YANDEX_API_KEY = os.environ['YANDEX_API_KEY'] 
-    FOLDER_ID = os.environ['FOLDER_ID']
-    logger.info("Переменные окружения загружены успешно")
-except KeyError as e:
-    logger.error(f"Не найдена переменная окружения: {e}")
-    exit(1)
+BOT_TOKEN = os.environ['BOT_TOKEN']
 
-# URL для YandexGPT API
-YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
-    welcome_text = """
-🍳 Привет! Я RecipeChefAI - твой помощник в готовке!
-
-Просто отправь мне список продуктов через запятую, например:
-"курица, рис, лук, морковь, помидоры"
-
-И я придумаю для те вкусный рецепт!
-    """
-    await update.message.reply_text(welcome_text)
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстовых сообщений с продуктами"""
-    user_message = update.message.text
-    
-    try:
-        # Показываем что бот печатает
-        await update.message.chat.send_action(action="typing")
-        
-        # Создаем промт для YandexGPT
-        prompt = f"""
-Пользователь предоставил следующие продукты: {user_message}
-
-Придумай подробный кулинарный рецепт используя эти продукты. 
-Рецепт должен содержать:
-1. Название блюда
-2. Ингредиенты с количествами
-3. Пошаговый способ приготовления
-4. Время приготовления
-
-Рецепт должен быть практичным и простым для приготовления в домашних условиях.
-        """
-        
-        # Отправляем запрос к YandexGPT
-        recipe = await get_recipe_from_yagpt(prompt)
-        
-        # Отправляем рецепт пользователю
-        await update.message.reply_text(recipe)
-        
-    except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        await update.message.reply_text("😔 Произошла ошибка при генерации рецепта. Попробуйте еще раз.")
-
-async def get_recipe_from_yagpt(prompt: str) -> str:
-    """Функция для взаимодействия с YandexGPT API"""
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Api-Key {YANDEX_API_KEY}"
-    }
-    
-    data = {
-        "modelUri": f"gpt://{FOLDER_ID}/yandexgpt-lite",
-        "completionOptions": {
-            "stream": False,
-            "temperature": 0.7,
-            "maxTokens": 2000
-        },
-        "messages": [
-            {
-                "role": "user",
-                "text": prompt
-            }
-        ]
-    }
-    
-    response = requests.post(YANDEX_GPT_URL, headers=headers, json=data)
-    response.raise_for_status()
-    
-    result = response.json()
-    return result['result']['alternatives'][0]['message']['text']
+async def start(update, context):
+    await update.message.reply_text("Тест: бот работает!")
 
 def main():
-    """Основная функция запуска бота"""
-    try:
-        # Создаем приложение
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Добавляем обработчики
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        # Запускаем бота
-        logger.info("Бот запускается...")
-        application.run_polling()
-        
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    logger.info("Тестовый бот запускается...")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
