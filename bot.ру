@@ -47,8 +47,13 @@ user_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
+    # Тестовая проверка переменных
+    logger.info(f"BOT_TOKEN: {bool(BOT_TOKEN)}")
+    logger.info(f"YANDEX_API_KEY: {bool(YANDEX_API_KEY)}") 
+    logger.info(f"FOLDER_ID: {bool(FOLDER_ID)}")
+    
     welcome_text = """
-🍳 *Привет! Я RecipeChefAI - твой умный помощник в готовке!*
+🍳 *Привет! Я RecipeChefAI...*
 
 Просто отправь мне список продуктов, которые у тебя есть, и я:
 • Придумаю вкусный рецепт 🎯
