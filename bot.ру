@@ -22,30 +22,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Получаем конфигурационные переменные из Railway
-BOT_TOKEN = os.environ['BOT_TOKEN']
-YANDEX_API_KEY = os.environ['YANDEX_API_KEY'] 
-FOLDER_ID = os.environ['FOLDER_ID']
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+YANDEX_API_KEY = os.environ.get('YANDEX_API_KEY')
+FOLDER_ID = os.environ.get('FOLDER_ID')
 
 # URL для YandexGPT API
 YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
 # Состояния диалога
-class DialogState(Enum):
-    AWAITING_PRODUCTS = 1
-    AWAITING_DISH_TYPE = 2
-    AWAITING_TIME = 3
-    AWAITING_PREFERENCES = 4
-    AWAITING_PORTIONS = 5
-    AWAITING_CALORIES = 6
+(
+    AWAITING_PRODUCTS,
+    AWAITING_DISH_TYPE, 
+    AWAITING_TIME,
+    AWAITING_PREFERENCES,
+    AWAITING_PORTIONS,
+    AWAITING_CALORIES
+) = range(6)
 
 # Клавиатуры для быстрого выбора
 DISH_TYPE_KEYBOARD = [["🍲 Салат", "🍜 Суп"], ["🍛 Горячее", "🍰 Десерт"], ["🎲 Предложи вариант"]]
 TIME_KEYBOARD = [["🔸 15 мин", "🔸 30 мин"], ["🔸 45 мин", "🔸 60 мин+"], ["⏰ Не важно"]]
 PORTIONS_KEYBOARD = [["1-2", "3-4"], ["5-6", "7+"]]
 CALORIES_KEYBOARD = [["✅ Да", "❌ Нет"]]
-
-# Хранение данных пользователя во время диалога
-user_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -63,15 +61,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 *Готов готовить? Отправляй продукты!* 🚀
     """
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
-    return DialogState.AWAITING_PRODUCTS
+    
+    # Очищаем предыдущие данные пользователя
+    context.user_data.clear()
+    
+    return AWAITING_PRODUCTS
 
 async def handle_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик получения списка продуктов"""
-    user_id = update.message.from_user.id
     user_message = update.message.text
     
-    # Сохраняем продукты
-    user_data[user_id] = {'products': user_message}
+    # Сохраняем продукты в context.user_data
+    context.user_data['products'] = user_message
     
     # Спрашиваем тип блюда
     await update.message.reply_text(
@@ -80,14 +81,12 @@ async def handle_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(DISH_TYPE_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
     )
     
-    return DialogState.AWAITING_DISH_TYPE
+    return AWAITING_DISH_TYPE
 
 async def handle_dish_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора типа блюда"""
-    user_id = update.message.from_user.id
     dish_type = update.message.text
-    
-    user_data[user_id]['dish_type'] = dish_type
+    context.user_data['dish_type'] = dish_type
     
     # Спрашиваем время
     await update.message.reply_text(
@@ -96,14 +95,12 @@ async def handle_dish_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(TIME_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
     )
     
-    return DialogState.AWAITING_TIME
+    return AWAITING_TIME
 
 async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора времени"""
-    user_id = update.message.from_user.id
     cooking_time = update.message.text
-    
-    user_data[user_id]['cooking_time'] = cooking_time
+    context.user_data['cooking_time'] = cooking_time
     
     # Спрашиваем предпочтения
     await update.message.reply_text(
@@ -114,14 +111,12 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardRemove()
     )
     
-    return DialogState.AWAITING_PREFERENCES
+    return AWAITING_PREFERENCES
 
 async def handle_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик предпочтений"""
-    user_id = update.message.from_user.id
     preferences = update.message.text
-    
-    user_data[user_id]['preferences'] = preferences
+    context.user_data['preferences'] = preferences
     
     # Спрашиваем количество порций
     await update.message.reply_text(
@@ -130,14 +125,12 @@ async def handle_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE)
         reply_markup=ReplyKeyboardMarkup(PORTIONS_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
     )
     
-    return DialogState.AWAITING_PORTIONS
+    return AWAITING_PORTIONS
 
 async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора порций"""
-    user_id = update.message.from_user.id
     portions = update.message.text
-    
-    user_data[user_id]['portions'] = portions
+    context.user_data['portions'] = portions
     
     # Спрашиваем про расчет калорий
     await update.message.reply_text(
@@ -146,15 +139,14 @@ async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardMarkup(CALORIES_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
     )
     
-    return DialogState.AWAITING_CALORIES
+    return AWAITING_CALORIES
 
 async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора расчета калорий и генерация рецепта"""
-    user_id = update.message.from_user.id
     calories_choice = update.message.text
     
     # Сохраняем выбор пользователя
-    user_data[user_id]['need_calories'] = calories_choice == "✅ Да"
+    context.user_data['need_calories'] = calories_choice == "✅ Да"
     
     await update.message.reply_text(
         "🎯 *Отлично! Генерирую рецепт...*",
@@ -167,39 +159,49 @@ async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.chat.send_action(action="typing")
         
         # Создаем оптимизированный промт для YandexGPT
-        user_info = user_data[user_id]
-        prompt = create_optimized_prompt(user_info)
+        prompt = create_optimized_prompt(context.user_data)
         
         # Отправляем запрос к YandexGPT
         recipe_text = await get_recipe_from_yagpt(prompt)
         
         # Форматируем и отправляем рецепт
-        formatted_recipe = format_recipe_response(recipe_text, user_info.get('need_calories', False))
+        formatted_recipe = format_recipe_response(recipe_text, context.user_data.get('need_calories', False))
         await update.message.reply_text(formatted_recipe, parse_mode='HTML')
         
-        # Очищаем данные пользователя после успешной генерации
-        if user_id in user_data:
-            del user_data[user_id]
-            
     except Exception as e:
         error_message = handle_error(e)
         await update.message.reply_text(error_message)
-        
-        # Очищаем данные при ошибке
-        if user_id in user_data:
-            del user_data[user_id]
     
+    # Очищаем данные после завершения диалога
+    context.user_data.clear()
     return ConversationHandler.END
 
-def create_optimized_prompt(user_info: dict) -> str:
+async def handle_direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик сообщений вне диалога - предлагаем начать с /start"""
+    await update.message.reply_text(
+        "🍳 Чтобы получить рецепт, начните с команды /start\n\n"
+        "Я помогу приготовить вкусное блюдо из ваших продуктов!",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена диалога"""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "Диалог отменен. Начните заново с /start",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
+
+def create_optimized_prompt(user_data: dict) -> str:
     """Создает оптимизированный промт для YandexGPT"""
     
-    products = user_info.get('products', '')
-    dish_type = user_info.get('dish_type', '')
-    cooking_time = user_info.get('cooking_time', '')
-    preferences = user_info.get('preferences', '')
-    portions = user_info.get('portions', '')
-    need_calories = user_info.get('need_calories', False)
+    products = user_data.get('products', '')
+    dish_type = user_data.get('dish_type', '')
+    cooking_time = user_data.get('cooking_time', '')
+    preferences = user_data.get('preferences', '')
+    portions = user_data.get('portions', '')
+    need_calories = user_data.get('need_calories', False)
     
     calories_section = ""
     if need_calories:
@@ -234,7 +236,6 @@ def create_optimized_prompt(user_info: dict) -> str:
 def format_recipe_response(recipe_text: str, need_calories: bool) -> str:
     """Форматирует ответ рецепта в красивый HTML"""
     
-    # Базовая обработка текста для улучшения читаемости
     lines = recipe_text.split('\n')
     formatted_lines = []
     
@@ -261,7 +262,6 @@ def format_recipe_response(recipe_text: str, need_calories: bool) -> str:
         else:
             formatted_lines.append(line)
     
-    # Добавляем хештеги в конец
     formatted_text = '\n'.join(formatted_lines)
     
     if need_calories:
@@ -270,24 +270,6 @@ def format_recipe_response(recipe_text: str, need_calories: bool) -> str:
     formatted_text += "\n\n#рецепт #вкусно #готовимдома"
     
     return formatted_text
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена диалога"""
-    user_id = update.message.from_user.id
-    if user_id in user_data:
-        del user_data[user_id]
-    
-    await update.message.reply_text(
-        "Диалог отменен. Начните заново с /start",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return ConversationHandler.END
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик случайных сообщений вне диалога"""
-    await update.message.reply_text(
-        "Чтобы получить рецепт, начните с команды /start 🍳"
-    )
 
 async def get_recipe_from_yagpt(prompt: str) -> str:
     """Функция для взаимодействия с YandexGPT API"""
@@ -347,45 +329,42 @@ def handle_error(error: Exception) -> str:
 def main():
     """Основная функция запуска бота"""
     try:
-        # Проверяем переменные при запуске
         if not all([BOT_TOKEN, YANDEX_API_KEY, FOLDER_ID]):
             logger.error("Не все переменные окружения установлены!")
             return
         
-        # Создаем приложение
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # Настраиваем ConversationHandler для многошагового диалога
+        # Настраиваем ConversationHandler
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
             states={
-                DialogState.AWAITING_PRODUCTS: [
+                AWAITING_PRODUCTS: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_products)
                 ],
-                DialogState.AWAITING_DISH_TYPE: [
+                AWAITING_DISH_TYPE: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_dish_type)
                 ],
-                DialogState.AWAITING_TIME: [
+                AWAITING_TIME: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_time)
                 ],
-                DialogState.AWAITING_PREFERENCES: [
+                AWAITING_PREFERENCES: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_preferences)
                 ],
-                DialogState.AWAITING_PORTIONS: [
+                AWAITING_PORTIONS: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_portions)
                 ],
-                DialogState.AWAITING_CALORIES: [
+                AWAITING_CALORIES: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calories)
                 ],
             },
-            fallbacks=[CommandHandler("cancel", cancel)]
+            fallbacks=[CommandHandler("cancel", cancel)],
+            allow_reentry=True
         )
         
-        # Добавляем обработчики
         application.add_handler(conv_handler)
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_direct_message))
         
-        # Запускаем бота
         logger.info("Бот запускается...")
         application.run_polling(
             drop_pending_updates=True,
