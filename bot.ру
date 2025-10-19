@@ -62,41 +62,68 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(recipe)
         
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка при обработке сообщения: {e}")
         await update.message.reply_text("😔 Произошла ошибка при генерации рецепта. Попробуйте еще раз.")
 
 async def get_recipe_from_yagpt(prompt: str) -> str:
     """Функция для взаимодействия с YandexGPT API"""
-    
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Api-Key {YANDEX_API_KEY}"
-    }
-    
-    data = {
-        "modelUri": f"gpt://{FOLDER_ID}/yandexgpt-lite",
-        "completionOptions": {
-            "stream": False,
-            "temperature": 0.7,
-            "maxTokens": 2000
-        },
-        "messages": [
-            {
-                "role": "user",
-                "text": prompt
-            }
-        ]
-    }
-    
-    response = requests.post(YANDEX_GPT_URL, headers=headers, json=data)
-    response.raise_for_status()
-    
-    result = response.json()
-    return result['result']['alternatives'][0]['message']['text']
+    try:
+        logger.info(f"Отправка запроса к YandexGPT с папкой: {FOLDER_ID}")
+        
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Api-Key {YANDEX_API_KEY}",
+            "x-folder-id": FOLDER_ID
+        }
+        
+        data = {
+            "modelUri": f"gpt://{FOLDER_ID}/yandexgpt-lite",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.7,
+                "maxTokens": 2000
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "text": prompt
+                }
+            ]
+        }
+        
+        logger.info(f"Отправка запроса: {json.dumps(data, ensure_ascii=False)}")
+        
+        response = requests.post(YANDEX_GPT_URL, headers=headers, json=data, timeout=30)
+        logger.info(f"Статус ответа: {response.status_code}")
+        
+        if response.status_code != 200:
+            logger.error(f"Ошибка API: {response.status_code} - {response.text}")
+            raise Exception(f"API error: {response.status_code}")
+        
+        result = response.json()
+        logger.info(f"Получен ответ: {json.dumps(result, ensure_ascii=False)}")
+        
+        return result['result']['alternatives'][0]['message']['text']
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ошибка сети: {e}")
+        raise Exception("Ошибка подключения к YandexGPT")
+    except KeyError as e:
+        logger.error(f"Ошибка в структуре ответа: {e}")
+        raise Exception("Неверный формат ответа от YandexGPT")
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка: {e}")
+        raise
 
 def main():
     """Основная функция запуска бота"""
     try:
+        # Проверяем переменные
+        logger.info("Проверка переменных окружения...")
+        logger.info(f"BOT_TOKEN: {'установлен' if BOT_TOKEN else 'НЕ УСТАНОВЛЕН'}")
+        logger.info(f"YANDEX_API_KEY: {'установлен' if YANDEX_API_KEY else 'НЕ УСТАНОВЛЕН'}")
+        logger.info(f"FOLDER_ID: {FOLDER_ID}")
+        
         # Создаем приложение
         application = Application.builder().token(BOT_TOKEN).build()
         
