@@ -29,7 +29,7 @@ FOLDER_ID = os.environ.get('FOLDER_ID')
 # URL для YandexGPT API
 YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
-# Состояния диалога
+# Состояния диалога - ИСПРАВЛЕНО: правильное количество переменных
 (
     AWAITING_PRODUCTS,
     AWAITING_DISH_TYPE, 
@@ -38,7 +38,7 @@ YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completio
     AWAITING_PORTIONS,
     AWAITING_CALORIES,
     AWAITING_VALIDATION_CONFIRMATION
-) = range(8)
+) = range(7)  # 7 состояний
 
 # Клавиатуры для быстрого выбора
 DISH_TYPE_KEYBOARD = [["🍲 Салат", "🍜 Суп"], ["🍛 Горячее", "🍰 Десерт"], ["🎲 Предложи вариант"]]
@@ -325,8 +325,6 @@ async def handle_validation_confirmation(update: Update, context: ContextTypes.D
         )
         
         return AWAITING_PRODUCTS
-
-# ... остальные обработчики (handle_dish_type, handle_time, и т.д.) остаются без изменений ...
 
 async def handle_dish_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора типа блюда"""
