@@ -5,6 +5,7 @@ import re
 import time
 import requests
 import json
+from functools import wraps
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, 
@@ -48,6 +49,20 @@ PORTIONS_KEYBOARD = [["1-2", "3-4"], ["5-6", "7+"]]
 CALORIES_KEYBOARD = [["✅ Да", "❌ Нет"]]
 VALIDATION_KEYBOARD = [["✅ Да, генерировать", "❌ Нет, изменить список"]]
 
+def handle_telegram_errors(func):
+    """Декоратор для обработки ошибок в хендлерах"""
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
+        try:
+            return await func(update, context, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"Ошибка в {func.__name__}: {e}")
+            error_text = "❌ Произошла ошибка. Давайте начнем заново с /start"
+            if update.message:
+                await update.message.reply_text(error_text, reply_markup=ReplyKeyboardRemove())
+            return ConversationHandler.END
+    return wrapper
+
 class ProductValidator:
     def __init__(self):
         self.products_url = os.environ.get('PRODUCTS_DATA_URL')
@@ -75,9 +90,32 @@ class ProductValidator:
             logger.error(f"Ошибка загрузки данных продуктов: {e}")
             # Возвращаем базовый набор на случай ошибки
             return {
-                "products": ["картофель", "морковь", "лук", "помидоры", "огурцы", "курица", "говядина", "свинина", "рис", "гречка"],
-                "corrections": {},
-                "blocked_words": []
+                "products": [
+                    "картофель", "морковь", "лук", "помидоры", "огурцы", "капуста", 
+                    "курица", "говядина", "свинина", "колбаса", "сосиски", "яйца",
+                    "рис", "гречка", "макароны", "молоко", "сыр", "сметана", "хлеб"
+                ],
+                "corrections": {
+                    "мандавошки": "мандарины",
+                    "картофелин": "картофель", 
+                    "картошка": "картофель",
+                    "помидор": "помидоры",
+                    "огурчик": "огурцы",
+                    "перец": "перец болгарский",
+                    "курин": "курица",
+                    "говядин": "говядина", 
+                    "свинин": "свинина",
+                    "макарон": "макароны",
+                    "вермишель": "макароны",
+                    "спагетти": "макароны",
+                    "сосиска": "сосиски",
+                    "колбаска": "колбаса"
+                },
+                "blocked_words": [
+                    "хуй", "пизда", "ебал", "блядь", "бля", "ебать", "гондон", 
+                    "мудак", "жопа", "сучка", "долбаеб", "хуесос", "пиздец", 
+                    "охуенно", "охуенный", "охуеть", "выебок", "еблан"
+                ]
             }
     
     @staticmethod
@@ -161,6 +199,7 @@ class ProductValidator:
 # Создаем экземпляр валидатора
 product_validator = ProductValidator()
 
+@handle_telegram_errors
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
     welcome_text = """
@@ -172,7 +211,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Подскажу по времени ⏱️
 • Рассчитаю КБЖУ (по желанию) 📊
 
-*Например:* `курица, рис, лук, морковь, помидоры`
+*Например:* `курица, рис, лук, морковь, помидоры, колбаса, сосиски`
 
 *Готов готовить? Отправляй продукты!* 🚀
     """
@@ -181,6 +220,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return AWAITING_PRODUCTS
 
+@handle_telegram_errors
 async def handle_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик получения списка продуктов"""
     user_message = update.message.text
@@ -231,6 +271,7 @@ async def ask_validation_confirmation(update: Update, validation_result: dict):
     
     return AWAITING_VALIDATION_CONFIRMATION
 
+@handle_telegram_errors
 async def handle_validation_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик подтверждения валидации"""
     user_choice = update.message.text
@@ -249,13 +290,14 @@ async def handle_validation_confirmation(update: Update, context: ContextTypes.D
     else:
         await update.message.reply_text(
             "🔄 *Хорошо! Отправьте новый список продуктов.*\n\n"
-            "*Совет:* используйте реальные названия продуктов",
+            "*Совет:* используйте реальные названия продуктов как в примере выше",
             parse_mode='Markdown',
             reply_markup=ReplyKeyboardRemove()
         )
         
         return AWAITING_PRODUCTS
 
+@handle_telegram_errors
 async def handle_dish_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора типа блюда"""
     dish_type = update.message.text
@@ -269,6 +311,7 @@ async def handle_dish_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return AWAITING_TIME
 
+@handle_telegram_errors
 async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора времени"""
     cooking_time = update.message.text
@@ -284,6 +327,7 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return AWAITING_PREFERENCES
 
+@handle_telegram_errors
 async def handle_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик предпочтений"""
     preferences = update.message.text
@@ -297,6 +341,7 @@ async def handle_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     return AWAITING_PORTIONS
 
+@handle_telegram_errors
 async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора порций"""
     portions = update.message.text
@@ -310,6 +355,7 @@ async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return AWAITING_CALORIES
 
+@handle_telegram_errors
 async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора расчета калорий и генерация рецепта"""
     calories_choice = update.message.text
@@ -458,17 +504,19 @@ def handle_error(error: Exception) -> str:
     error_message = str(error)
     logger.error(f"Ошибка: {error_message}")
     
-    if "401" in error_message:
-        return "🔐 Ошибка доступа к YandexGPT"
-    elif "403" in error_message:
-        return "🚫 Доступ запрещен"
+    # Более понятные сообщения для пользователя
+    if "401" in error_message or "403" in error_message:
+        return "🔐 Проблема с доступом к AI. Сообщите разработчику."
     elif "429" in error_message:
-        return "⏳ Превышен лимит запросов. Попробуйте позже"
-    elif "500" in error_message:
-        return "⚡ Ошибка сервера YandexGPT"
+        return "⏳ Слишком много запросов. Попробуйте через минуту."
+    elif "500" in error_message or "502" in error_message:
+        return "⚡ Временная проблема с сервером. Попробуйте позже."
+    elif "timeout" in error_message.lower():
+        return "⏱️ Превышено время ожидания. Попробуйте еще раз."
     else:
-        return "❌ Произошла ошибка при генерации рецепта. Попробуйте еще раз."
+        return "❌ Не удалось сгенерировать рецепт. Попробуйте с другими продуктами."
 
+@handle_telegram_errors
 async def handle_direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик сообщений вне диалога - предлагаем начать с /start"""
     await update.message.reply_text(
@@ -477,6 +525,7 @@ async def handle_direct_message(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=ReplyKeyboardRemove()
     )
 
+@handle_telegram_errors
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена диалога"""
     context.user_data.clear()
