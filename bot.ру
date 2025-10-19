@@ -36,11 +36,13 @@ class DialogState(Enum):
     AWAITING_TIME = 3
     AWAITING_PREFERENCES = 4
     AWAITING_PORTIONS = 5
+    AWAITING_CALORIES = 6
 
 # Клавиатуры для быстрого выбора
 DISH_TYPE_KEYBOARD = [["🍲 Салат", "🍜 Суп"], ["🍛 Горячее", "🍰 Десерт"], ["🎲 Предложи вариант"]]
 TIME_KEYBOARD = [["🔸 15 мин", "🔸 30 мин"], ["🔸 45 мин", "🔸 60 мин+"], ["⏰ Не важно"]]
 PORTIONS_KEYBOARD = [["1-2", "3-4"], ["5-6", "7+"]]
+CALORIES_KEYBOARD = [["✅ Да", "❌ Нет"]]
 
 # Хранение данных пользователя во время диалога
 user_data = {}
@@ -52,8 +54,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Просто отправь мне список продуктов, которые у тебя есть, и я:
 • Придумаю вкусный рецепт 🎯
-• Учту твои пожелания ⭐
+• Учту твои пожелания ⭐  
 • Подскажу по времени ⏱️
+• Рассчитаю КБЖУ (по желанию) 📊
 
 *Например:* `курица, рис, лук, морковь, помидоры`
 
@@ -130,12 +133,28 @@ async def handle_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return DialogState.AWAITING_PORTIONS
 
 async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик выбора порций и генерация рецепта"""
+    """Обработчик выбора порций"""
     user_id = update.message.from_user.id
     portions = update.message.text
     
-    # Сохраняем порции и убираем клавиатуру
     user_data[user_id]['portions'] = portions
+    
+    # Спрашиваем про расчет калорий
+    await update.message.reply_text(
+        "📊 *Рассчитать КБЖУ (калории, белки, жиры, углеводы) для рецепта?*",
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(CALORIES_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
+    )
+    
+    return DialogState.AWAITING_CALORIES
+
+async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора расчета калорий и генерация рецепта"""
+    user_id = update.message.from_user.id
+    calories_choice = update.message.text
+    
+    # Сохраняем выбор пользователя
+    user_data[user_id]['need_calories'] = calories_choice == "✅ Да"
     
     await update.message.reply_text(
         "🎯 *Отлично! Генерирую рецепт...*",
@@ -155,7 +174,7 @@ async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         recipe_text = await get_recipe_from_yagpt(prompt)
         
         # Форматируем и отправляем рецепт
-        formatted_recipe = format_recipe_response(recipe_text)
+        formatted_recipe = format_recipe_response(recipe_text, user_info.get('need_calories', False))
         await update.message.reply_text(formatted_recipe, parse_mode='HTML')
         
         # Очищаем данные пользователя после успешной генерации
@@ -180,9 +199,14 @@ def create_optimized_prompt(user_info: dict) -> str:
     cooking_time = user_info.get('cooking_time', '')
     preferences = user_info.get('preferences', '')
     portions = user_info.get('portions', '')
+    need_calories = user_info.get('need_calories', False)
+    
+    calories_section = ""
+    if need_calories:
+        calories_section = "6. 📊 КБЖУ (калории, белки, жиры, углеводы на порцию)"
     
     prompt = f"""
-Ты — опытный шеф-повар. Создай кулинарный рецепт используя эти продукты: {products}
+Ты — опытный шеф-повар и диетолог. Создай кулинарный рецепт используя эти продукты: {products}
 
 Дополнительные пожелания:
 - Тип блюда: {dish_type}
@@ -196,6 +220,7 @@ def create_optimized_prompt(user_info: dict) -> str:
 3. 👨‍🍳 Приготовление (четкие пронумерованные шаги, максимум 5 шагов)
 4. ⏱️ Общее время готовки
 5. 💡 Полезный совет от шефа
+{calories_section}
 
 Требования:
 - Рецепт ДОЛЖЕН быть реалистичным и выполнимым с указанными продуктами
@@ -206,7 +231,7 @@ def create_optimized_prompt(user_info: dict) -> str:
 """
     return prompt
 
-def format_recipe_response(recipe_text: str) -> str:
+def format_recipe_response(recipe_text: str, need_calories: bool) -> str:
     """Форматирует ответ рецепта в красивый HTML"""
     
     # Базовая обработка текста для улучшения читаемости
@@ -229,6 +254,8 @@ def format_recipe_response(recipe_text: str) -> str:
             formatted_lines.append(f"\n<b>{line}</b>")
         elif any(marker in line for marker in ['💡', 'Совет', '🌟']):
             formatted_lines.append(f"\n<b>{line}</b>")
+        elif any(marker in line for marker in ['📊', 'КБЖУ', 'Калории']):
+            formatted_lines.append(f"\n<b>{line}</b>")
         elif line.startswith(('•', '-', '1.', '2.', '3.', '4.', '5.')):
             formatted_lines.append(f"• {line.lstrip('•- 12345.')}")
         else:
@@ -236,6 +263,10 @@ def format_recipe_response(recipe_text: str) -> str:
     
     # Добавляем хештеги в конец
     formatted_text = '\n'.join(formatted_lines)
+    
+    if need_calories:
+        formatted_text += "\n\n📊 <i>КБЖУ рассчитано приблизительно</i>"
+    
     formatted_text += "\n\n#рецепт #вкусно #готовимдома"
     
     return formatted_text
@@ -342,6 +373,9 @@ def main():
                 ],
                 DialogState.AWAITING_PORTIONS: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_portions)
+                ],
+                DialogState.AWAITING_CALORIES: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_calories)
                 ],
             },
             fallbacks=[CommandHandler("cancel", cancel)]
