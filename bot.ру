@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import os
 import logging
+import re
+import time
+import requests
+import json
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application, 
@@ -10,8 +14,6 @@ from telegram.ext import (
     ContextTypes, 
     ConversationHandler
 )
-import requests
-import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Получаем конфигурационные переменные из Railway
+# Получаем конфигурационные переменные
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 YANDEX_API_KEY = os.environ.get('YANDEX_API_KEY')
 FOLDER_ID = os.environ.get('FOLDER_ID')
@@ -35,14 +37,129 @@ YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completio
     AWAITING_TIME,
     AWAITING_PREFERENCES,
     AWAITING_PORTIONS,
-    AWAITING_CALORIES
-) = range(6)
+    AWAITING_CALORIES,
+    AWAITING_VALIDATION_CONFIRMATION
+) = range(7)
 
 # Клавиатуры для быстрого выбора
 DISH_TYPE_KEYBOARD = [["🍲 Салат", "🍜 Суп"], ["🍛 Горячее", "🍰 Десерт"], ["🎲 Предложи вариант"]]
 TIME_KEYBOARD = [["🔸 15 мин", "🔸 30 мин"], ["🔸 45 мин", "🔸 60 мин+"], ["⏰ Не важно"]]
 PORTIONS_KEYBOARD = [["1-2", "3-4"], ["5-6", "7+"]]
 CALORIES_KEYBOARD = [["✅ Да", "❌ Нет"]]
+VALIDATION_KEYBOARD = [["✅ Да, генерировать", "❌ Нет, изменить список"]]
+
+class ProductValidator:
+    def __init__(self):
+        self.products_url = os.environ.get('PRODUCTS_DATA_URL')
+        self.products_data = None
+        self.last_update = None
+        
+    def load_products_data(self) -> dict:
+        """Загружает данные продуктов из внешнего источника"""
+        if (self.products_data and self.last_update and 
+            (time.time() - self.last_update) < 3600):
+            return self.products_data
+            
+        try:
+            if self.products_url:
+                response = requests.get(self.products_url, timeout=10)
+                self.products_data = response.json()
+            else:
+                with open('products_data.json', 'r', encoding='utf-8') as f:
+                    self.products_data = json.load(f)
+            
+            self.last_update = time.time()
+            return self.products_data
+            
+        except Exception as e:
+            logger.error(f"Ошибка загрузки данных продуктов: {e}")
+            # Возвращаем базовый набор на случай ошибки
+            return {
+                "products": ["картофель", "морковь", "лук", "помидоры", "огурцы", "курица", "говядина", "свинина", "рис", "гречка"],
+                "corrections": {},
+                "blocked_words": []
+            }
+    
+    @staticmethod
+    def clean_input(text: str) -> str:
+        """Очищает входной текст"""
+        text = text.lower()
+        text = ' '.join(text.split())
+        text = re.sub(r'[^\w\s,]', '', text)
+        return text
+    
+    @staticmethod
+    def parse_products(text: str) -> list:
+        """Разбивает текст на отдельные продукты"""
+        products = [p.strip() for p in text.split(',')]
+        products = [p for p in products if p]
+        return products
+    
+    def validate_products(self, user_input: str) -> dict:
+        """Валидирует список продуктов и возвращает результат"""
+        products_data = self.load_products_data()
+        real_products = set(products_data.get("products", []))
+        corrections = products_data.get("corrections", {})
+        blocked_words = set(products_data.get("blocked_words", []))
+        
+        cleaned_input = self.clean_input(user_input)
+        products_list = self.parse_products(cleaned_input)
+        
+        valid_products = []
+        invalid_products = []
+        corrected_products = []
+        
+        for product in products_list:
+            if self.contains_blocked_words(product, blocked_words):
+                invalid_products.append(product)
+                continue
+                
+            corrected_product = self.correct_spelling(product, corrections)
+            if corrected_product != product:
+                corrected_products.append(f"{product} → {corrected_product}")
+                product = corrected_product
+            
+            if self.is_real_product(product, real_products):
+                valid_products.append(product)
+            else:
+                invalid_products.append(product)
+        
+        return {
+            "valid": valid_products,
+            "invalid": invalid_products,
+            "corrected": corrected_products,
+            "original_input": user_input,
+            "is_valid": len(valid_products) >= 1 and len(invalid_products) == 0
+        }
+    
+    def contains_blocked_words(self, product: str, blocked_words: set) -> bool:
+        """Проверяет наличие нецензурных слов"""
+        product_lower = product.lower()
+        return any(blocked_word in product_lower for blocked_word in blocked_words)
+    
+    def correct_spelling(self, product: str, corrections: dict) -> str:
+        """Исправляет частые опечатки"""
+        product_lower = product.lower()
+        for wrong, correct in corrections.items():
+            if wrong in product_lower:
+                return correct
+        return product
+    
+    def is_real_product(self, product: str, real_products: set) -> bool:
+        """Проверяет, есть ли продукт в белом списке"""
+        product_lower = product.lower()
+        
+        if product_lower in real_products:
+            return True
+        
+        for real_product in real_products:
+            if real_product in product_lower or product_lower in real_product:
+                return True
+        
+        return False
+
+# Создаем экземпляр валидатора
+product_validator = ProductValidator()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -61,19 +178,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(welcome_text, parse_mode='Markdown')
     
-    # Очищаем предыдущие данные пользователя
     context.user_data.clear()
-    
     return AWAITING_PRODUCTS
 
 async def handle_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик получения списка продуктов"""
     user_message = update.message.text
     
-    # Сохраняем продукты
-    context.user_data['products'] = user_message
+    validation_result = product_validator.validate_products(user_message)
+    context.user_data['validation_result'] = validation_result
     
-    # Спрашиваем тип блюда
+    if not validation_result["is_valid"]:
+        return await ask_validation_confirmation(update, validation_result)
+    
+    context.user_data['products'] = ', '.join(validation_result["valid"])
+    
     await update.message.reply_text(
         "🍽️ *Что хотите приготовить?*",
         parse_mode='Markdown',
@@ -82,12 +201,66 @@ async def handle_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return AWAITING_DISH_TYPE
 
+async def ask_validation_confirmation(update: Update, validation_result: dict):
+    """Спрашивает подтверждение при проблемах с валидацией"""
+    
+    message_lines = ["🤔 *Я нашел проблемы в вашем списке:*"]
+    
+    if validation_result["valid"]:
+        message_lines.append("\n✅ *Принял:*")
+        for product in validation_result["valid"]:
+            message_lines.append(f"• {product}")
+    
+    if validation_result["corrected"]:
+        message_lines.append("\n🔄 *Исправил опечатки:*")
+        for correction in validation_result["corrected"]:
+            message_lines.append(f"• {correction}")
+    
+    if validation_result["invalid"]:
+        message_lines.append("\n❌ *Не понял:*")
+        for product in validation_result["invalid"]:
+            message_lines.append(f"• {product}")
+    
+    message_lines.append("\n*Сгенерировать рецепт из доступных продуктов?*")
+    
+    await update.message.reply_text(
+        "\n".join(message_lines),
+        parse_mode='Markdown',
+        reply_markup=ReplyKeyboardMarkup(VALIDATION_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
+    )
+    
+    return AWAITING_VALIDATION_CONFIRMATION
+
+async def handle_validation_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик подтверждения валидации"""
+    user_choice = update.message.text
+    validation_result = context.user_data.get('validation_result', {})
+    
+    if user_choice == "✅ Да, генерировать" and validation_result.get("valid"):
+        context.user_data['products'] = ', '.join(validation_result["valid"])
+        
+        await update.message.reply_text(
+            "🍽️ *Что хотите приготовить?*",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardMarkup(DISH_TYPE_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
+        )
+        
+        return AWAITING_DISH_TYPE
+    else:
+        await update.message.reply_text(
+            "🔄 *Хорошо! Отправьте новый список продуктов.*\n\n"
+            "*Совет:* используйте реальные названия продуктов",
+            parse_mode='Markdown',
+            reply_markup=ReplyKeyboardRemove()
+        )
+        
+        return AWAITING_PRODUCTS
+
 async def handle_dish_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора типа блюда"""
     dish_type = update.message.text
     context.user_data['dish_type'] = dish_type
     
-    # Спрашиваем время
     await update.message.reply_text(
         "⏱️ *Сколько минут у вас есть на готовку?*",
         parse_mode='Markdown',
@@ -101,7 +274,6 @@ async def handle_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cooking_time = update.message.text
     context.user_data['cooking_time'] = cooking_time
     
-    # Спрашиваем предпочтения
     await update.message.reply_text(
         "🌱 *Есть диетические ограничения или предпочтения?*\n\n"
         "*Например:* вегетарианское, острое, без молочного, диетическое\n"
@@ -117,7 +289,6 @@ async def handle_preferences(update: Update, context: ContextTypes.DEFAULT_TYPE)
     preferences = update.message.text
     context.user_data['preferences'] = preferences
     
-    # Спрашиваем количество порций
     await update.message.reply_text(
         "👨‍👩‍👧‍👦 *На сколько человек готовим?*",
         parse_mode='Markdown',
@@ -131,7 +302,6 @@ async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     portions = update.message.text
     context.user_data['portions'] = portions
     
-    # Спрашиваем про расчет калорий
     await update.message.reply_text(
         "📊 *Рассчитать КБЖУ (калории, белки, жиры, углеводы) для рецепта?*",
         parse_mode='Markdown',
@@ -143,8 +313,6 @@ async def handle_portions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик выбора расчета калорий и генерация рецепта"""
     calories_choice = update.message.text
-    
-    # Сохраняем выбор пользователя
     context.user_data['need_calories'] = calories_choice == "✅ Да"
     
     await update.message.reply_text(
@@ -154,16 +322,11 @@ async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
-        # Показываем что бот печатает
         await update.message.chat.send_action(action="typing")
         
-        # Создаем оптимизированный промт для YandexGPT
         prompt = create_optimized_prompt(context.user_data)
-        
-        # Отправляем запрос к YandexGPT
         recipe_text = await get_recipe_from_yagpt(prompt)
         
-        # Форматируем и отправляем рецепт
         formatted_recipe = format_recipe_response(recipe_text, context.user_data.get('need_calories', False))
         await update.message.reply_text(formatted_recipe, parse_mode='HTML')
         
@@ -171,7 +334,6 @@ async def handle_calories(update: Update, context: ContextTypes.DEFAULT_TYPE):
         error_message = handle_error(e)
         await update.message.reply_text(error_message)
     
-    # Очищаем данные после завершения диалога
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -226,7 +388,6 @@ def format_recipe_response(recipe_text: str, need_calories: bool) -> str:
         if not line:
             continue
             
-        # Определяем тип строки и форматируем
         if any(marker in line for marker in ['🍽️', 'Название', '🥘']):
             formatted_lines.append(f"<b>{line}</b>\n")
         elif any(marker in line for marker in ['📋', 'Ингредиенты', '🥕']):
@@ -334,12 +495,14 @@ def main():
         
         application = Application.builder().token(BOT_TOKEN).build()
         
-        # Настраиваем ConversationHandler
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("start", start)],
             states={
                 AWAITING_PRODUCTS: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_products)
+                ],
+                AWAITING_VALIDATION_CONFIRMATION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_validation_confirmation)
                 ],
                 AWAITING_DISH_TYPE: [
                     MessageHandler(filters.TEXT & ~filters.COMMAND, handle_dish_type)
